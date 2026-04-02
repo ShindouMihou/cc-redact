@@ -2,9 +2,9 @@
 
 // src/redact.ts
 import { createHash } from "crypto";
-import { existsSync as existsSync2, mkdirSync, writeFileSync } from "fs";
-import { readFile as readFile2 } from "fs/promises";
-import { extname as extname2, dirname } from "path";
+import { readFile as readFile2, writeFile, mkdir } from "fs/promises";
+import { extname as extname2, join } from "path";
+import { tmpdir } from "os";
 
 // src/config.ts
 import picomatch from "picomatch";
@@ -79,7 +79,7 @@ var redactEnv = (content) => {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (inMultilineValue) {
-      if (line.includes(closingQuote)) {
+      if (new RegExp(`${closingQuote}\\s*(#.*)?$`).test(line)) {
         inMultilineValue = false;
         closingQuote = "";
       }
@@ -115,9 +115,10 @@ var redactEnv = (content) => {
   return notice + result.join("\n");
 };
 
-// src/redactors/json.ts
+// src/redactors/shared.ts
 function redactValue(value) {
-  if (value === null) return null;
+  if (value === null || value === void 0) return value;
+  if (value instanceof Date) return /* @__PURE__ */ new Date(0);
   if (Array.isArray(value)) return value.map(redactValue);
   if (typeof value === "object") {
     const result = {};
@@ -131,6 +132,8 @@ function redactValue(value) {
   if (typeof value === "boolean") return false;
   return value;
 }
+
+// src/redactors/json.ts
 function stripJsonComments(content) {
   let result = "";
   let inString = false;
@@ -193,45 +196,33 @@ function redactScalar(node) {
 }
 var redactYaml = (content) => {
   const doc = parseDocument(content);
-  visit(doc, {
-    Pair(_key, node) {
-      if (isScalar(node.value)) {
-        redactScalar(node.value);
-      }
-    },
-    Seq(_key, node) {
-      for (const item of node.items) {
-        if (isScalar(item)) {
-          redactScalar(item);
+  if (isScalar(doc.contents)) {
+    redactScalar(doc.contents);
+  } else {
+    visit(doc, {
+      Pair(_key, node) {
+        if (isScalar(node.value)) {
+          redactScalar(node.value);
+        }
+      },
+      Seq(_key, node) {
+        for (const item of node.items) {
+          if (isScalar(item)) {
+            redactScalar(item);
+          }
         }
       }
-    }
-  });
+    });
+  }
   const notice = "# [cc-redact] This file has been redacted for security. All values are replaced with type-safe placeholders.\n# The keys and structure are accurate and can be referenced for typings.\n";
   return notice + doc.toString();
 };
 
 // src/redactors/toml.ts
 import { parse, stringify } from "smol-toml";
-function redactValue2(value) {
-  if (value === null || value === void 0) return value;
-  if (value instanceof Date) return /* @__PURE__ */ new Date(0);
-  if (Array.isArray(value)) return value.map(redactValue2);
-  if (typeof value === "object") {
-    const result = {};
-    for (const [k, v] of Object.entries(value)) {
-      result[k] = redactValue2(v);
-    }
-    return result;
-  }
-  if (typeof value === "string") return "{{REDACTED}}";
-  if (typeof value === "number") return 0;
-  if (typeof value === "boolean") return false;
-  return value;
-}
 var redactToml = (content) => {
   const parsed = parse(content);
-  const redacted = redactValue2(parsed);
+  const redacted = redactValue(parsed);
   const notice = "# [cc-redact] This file has been redacted for security. All values are replaced with type-safe placeholders.\n# The keys and structure are accurate and can be referenced for typings.\n";
   return notice + stringify(redacted);
 };
@@ -245,10 +236,11 @@ var redactors = {
 };
 
 // src/redact.ts
+var CC_REDACT_TEMP_DIR = join(tmpdir(), "cc-redact");
 function getRedactedTempPath(originalPath) {
   const hash = createHash("sha256").update(originalPath).digest("hex").slice(0, 16);
   const ext = extname2(originalPath) || ".env";
-  return `/tmp/cc-redact/${hash}${ext}`;
+  return join(CC_REDACT_TEMP_DIR, `${hash}${ext}`);
 }
 async function processReadRequest(input) {
   const filePath = input.tool_input.file_path;
@@ -264,29 +256,33 @@ async function processReadRequest(input) {
       reason: `File "${filePath}" matches a .redactcc pattern but has an unrecognized format. Read blocked to protect potentially sensitive content.`
     };
   }
-  if (!existsSync2(filePath)) {
-    return { kind: "pass" };
+  let content;
+  try {
+    content = await readFile2(filePath, "utf-8");
+  } catch (err) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+      return { kind: "pass" };
+    }
+    throw err;
   }
-  const content = await readFile2(filePath, "utf-8");
   const redactor = redactors[detection.format];
   const redacted = redactor(content);
   const tempPath = getRedactedTempPath(filePath);
-  const tempDir = dirname(tempPath);
-  if (!existsSync2(tempDir)) {
-    mkdirSync(tempDir, { recursive: true });
-  }
-  writeFileSync(tempPath, redacted, "utf-8");
+  await mkdir(CC_REDACT_TEMP_DIR, { recursive: true, mode: 448 });
+  await writeFile(tempPath, redacted, { encoding: "utf-8", mode: 384 });
   return { kind: "redirect", tempPath };
 }
 
 // src/main.ts
-import { existsSync as existsSync3, unlinkSync } from "fs";
+import { existsSync as existsSync2, unlinkSync } from "fs";
+import { resolve as resolvePath } from "path";
 function readStdin() {
   return new Promise((resolve) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", () => resolve(""));
   });
 }
 var isCleanup = process.argv.includes("--cleanup");
@@ -295,12 +291,26 @@ try {
   const input = JSON.parse(raw);
   if (isCleanup) {
     const filePath = input.tool_input.file_path;
-    if (filePath.startsWith("/tmp/cc-redact/") && existsSync3(filePath)) {
-      unlinkSync(filePath);
+    const resolved = resolvePath(filePath);
+    if (resolved.startsWith(CC_REDACT_TEMP_DIR + "/") && existsSync2(resolved)) {
+      unlinkSync(resolved);
     }
     process.exit(0);
   }
-  const result = await processReadRequest(input);
+  let result;
+  try {
+    result = await processReadRequest(input);
+  } catch (err) {
+    const output2 = {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `cc-redact failed to process file: ${err instanceof Error ? err.message : "unknown error"}`
+      }
+    };
+    console.log(JSON.stringify(output2));
+    process.exit(0);
+  }
   if (result.kind === "pass") {
     process.exit(0);
   }

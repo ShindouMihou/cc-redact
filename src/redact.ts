@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { extname, dirname } from "node:path";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { extname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { loadRedactConfig, fileMatchesPatterns } from "./config.ts";
 import { detectFormat } from "./format.ts";
 import { redactors } from "./redactors/index.ts";
@@ -23,10 +23,12 @@ interface RedactPassThrough {
 
 export type RedactResult = RedactRedirect | RedactDeny | RedactPassThrough;
 
+export const CC_REDACT_TEMP_DIR = join(tmpdir(), "cc-redact");
+
 export function getRedactedTempPath(originalPath: string): string {
   const hash = createHash("sha256").update(originalPath).digest("hex").slice(0, 16);
   const ext = extname(originalPath) || ".env";
-  return `/tmp/cc-redact/${hash}${ext}`;
+  return join(CC_REDACT_TEMP_DIR, `${hash}${ext}`);
 }
 
 export async function processReadRequest(
@@ -49,20 +51,22 @@ export async function processReadRequest(
     };
   }
 
-  if (!existsSync(filePath)) {
-    return { kind: "pass" };
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf-8");
+  } catch (err: unknown) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") {
+      return { kind: "pass" };
+    }
+    throw err;
   }
 
-  const content = await readFile(filePath, "utf-8");
   const redactor = redactors[detection.format];
   const redacted = redactor(content);
 
   const tempPath = getRedactedTempPath(filePath);
-  const tempDir = dirname(tempPath);
-  if (!existsSync(tempDir)) {
-    mkdirSync(tempDir, { recursive: true });
-  }
-  writeFileSync(tempPath, redacted, "utf-8");
+  await mkdir(CC_REDACT_TEMP_DIR, { recursive: true, mode: 0o700 });
+  await writeFile(tempPath, redacted, { encoding: "utf-8", mode: 0o600 });
 
   return { kind: "redirect", tempPath };
 }

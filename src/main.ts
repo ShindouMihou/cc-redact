@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-import { processReadRequest } from "./redact.ts";
+import { processReadRequest, CC_REDACT_TEMP_DIR } from "./redact.ts";
+import type { RedactResult } from "./redact.ts";
 import type { HookInput } from "./types.ts";
 import { existsSync, unlinkSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -9,6 +11,7 @@ function readStdin(): Promise<string> {
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => (data += chunk));
     process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", () => resolve(""));
   });
 }
 
@@ -20,13 +23,27 @@ try {
 
   if (isCleanup) {
     const filePath = input.tool_input.file_path;
-    if (filePath.startsWith("/tmp/cc-redact/") && existsSync(filePath)) {
-      unlinkSync(filePath);
+    const resolved = resolvePath(filePath);
+    if (resolved.startsWith(CC_REDACT_TEMP_DIR + "/") && existsSync(resolved)) {
+      unlinkSync(resolved);
     }
     process.exit(0);
   }
 
-  const result = await processReadRequest(input);
+  let result: RedactResult;
+  try {
+    result = await processReadRequest(input);
+  } catch (err) {
+    const output = {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `cc-redact failed to process file: ${err instanceof Error ? err.message : "unknown error"}`,
+      },
+    };
+    console.log(JSON.stringify(output));
+    process.exit(0);
+  }
 
   if (result.kind === "pass") {
     process.exit(0);

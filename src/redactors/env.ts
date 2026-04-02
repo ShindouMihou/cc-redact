@@ -10,7 +10,7 @@ export const redactEnv: Redactor = (content) => {
     const line = lines[i]!;
 
     if (inMultilineValue) {
-      if (line.includes(closingQuote)) {
+      if (new RegExp(`${closingQuote}\\s*(#.*)?$`).test(line)) {
         inMultilineValue = false;
         closingQuote = "";
       }

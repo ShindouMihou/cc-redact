@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 
-const CWD = "/Volumes/Krnzy/Programming/claude-hooks";
+import { resolve } from "node:path";
+const CWD = resolve(import.meta.dir, "../..");
 const TMP_BASE = `/tmp/cc-redact-integration-${Date.now()}`;
 
 function runHook(toolInput: Record<string, unknown>, cwd?: string) {

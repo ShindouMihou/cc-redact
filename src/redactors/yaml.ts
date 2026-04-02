@@ -17,20 +17,24 @@ function redactScalar(node: Scalar): void {
 export const redactYaml: Redactor = (content) => {
   const doc = parseDocument(content);
 
-  visit(doc, {
-    Pair(_key, node) {
-      if (isScalar(node.value)) {
-        redactScalar(node.value);
-      }
-    },
-    Seq(_key, node) {
-      for (const item of node.items) {
-        if (isScalar(item)) {
-          redactScalar(item);
+  if (isScalar(doc.contents)) {
+    redactScalar(doc.contents);
+  } else {
+    visit(doc, {
+      Pair(_key, node) {
+        if (isScalar(node.value)) {
+          redactScalar(node.value);
         }
-      }
-    },
-  });
+      },
+      Seq(_key, node) {
+        for (const item of node.items) {
+          if (isScalar(item)) {
+            redactScalar(item);
+          }
+        }
+      },
+    });
+  }
 
   const notice =
     "# [cc-redact] This file has been redacted for security. All values are replaced with type-safe placeholders.\n" +
