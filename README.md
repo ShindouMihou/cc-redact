@@ -239,7 +239,7 @@ Files with unrecognized extensions that match a `.redactcc` pattern are denied e
 
 ### Error Handling
 
-If any error occurs during redaction (missing file, parse error, write failure), the hook silently passes through and lets Claude read the original file. The hook never blocks Claude from working.
+If any error occurs during redaction (missing file, parse error, write failure), the hook blocks Claude from reading the file.
 
 ## Limitations
 
