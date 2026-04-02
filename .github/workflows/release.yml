@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: 'Custom version (overrides bump type, e.g. 2.0.0-beta.1)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test
+
+      - name: Determine new version
+        id: version
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          if [ -n "${{ inputs.custom_version }}" ]; then
+            NEW="${{ inputs.custom_version }}"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            case "${{ inputs.bump }}" in
+              major) NEW="$((MAJOR + 1)).0.0" ;;
+              minor) NEW="$MAJOR.$((MINOR + 1)).0" ;;
+              patch) NEW="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+            esac
+          fi
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Bumping $CURRENT → $NEW"
+
+      - name: Bump version in package.json
+        run: |
+          VERSION="${{ steps.version.outputs.new }}"
+          node -e "
+            const fs = require('fs');
+            const f = './package.json';
+            const j = JSON.parse(fs.readFileSync(f));
+            j.version = '$VERSION';
+            fs.writeFileSync(f, JSON.stringify(j, null, 2) + '\n');
+          "
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit, tag, and push
+        run: |
+          VERSION="${{ steps.version.outputs.new }}"
+          git add package.json
+          git commit -m "release: v$VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD --tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.new }}"
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --generate-notes \
+            --latest

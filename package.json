@@ -1,0 +1,39 @@
+{
+  "name": "cc-redact",
+  "version": "1.0.0",
+  "description": "Claude Code hook that automatically redacts secrets from files before Claude can read them",
+  "type": "module",
+  "bin": {
+    "cc-redact": "dist/main.js"
+  },
+  "files": [
+    "dist/**/*.js"
+  ],
+  "scripts": {
+    "build": "tsup src/main.ts --format esm --target node18 --clean",
+    "test": "bun test src/__tests__/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "hook",
+    "redact",
+    "secrets",
+    "security"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/picomatch": "^4.0.2",
+    "tsup": "^8.5.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "picomatch": "^4.0.4",
+    "smol-toml": "^1.6.1",
+    "yaml": "^2.8.3"
+  }
+}
